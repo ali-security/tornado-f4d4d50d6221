@@ -5,15 +5,6 @@
 name: Build
 
 on:
-  push:
-    branches:
-      # Run on release branches. This gives us a chance to detect rot in this
-      # configuration before pushing a tag (which we'd rather not have to undo).
-      - "branch[0-9]*"
-    tags:
-      # The main purpose of this workflow is to build wheels for release tags.
-      # It runs automatically on tags matching this pattern and pushes to pypi.
-      - "v*"
   workflow_dispatch:
     # Allow this workflow to be run manually (pushing to testpypi instead of pypi)
 
@@ -26,6 +17,7 @@ jobs:
   build_sdist:
     name: Build sdist
     runs-on: ubuntu-22.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,6 +27,10 @@ jobs:
         with:
           python-version: ${{ env.python-version }}
 
+      - name: Install setuptools and wheel
+        run: pip install setuptools==80.7.1 wheel==0.46.1
+      - name: remove speedups.pyi and __init__.pyi
+        run: rm -f tornado/speedups.pyi tornado/__init__.pyi
       - name: Check metadata
         run: "python setup.py check"
       - name: Build sdist
@@ -48,6 +44,7 @@ jobs:
   build_wheels:
     name: Build wheels on ${{ matrix.os }}
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:
@@ -64,50 +61,17 @@ jobs:
 
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.22
+        env:
+          CIBW_BEFORE_BUILD: pip install setuptools==80.7.1 wheel==0.46.1
 
       - name: Audit ABI3 compliance
         # This may be moved into cibuildwheel itself in the future. See
         # https://github.com/pypa/cibuildwheel/issues/1342
-        run: "pip install abi3audit && abi3audit --verbose --summary ./wheelhouse/*.whl"
+        run: "pip install --index-url 'https://:2025-05-15T23:00:00.000000Z@time-machines-pypi.sealsecurity.io/' abi3audit && abi3audit --verbose --summary ./wheelhouse/*.whl"
 
       - uses: actions/upload-artifact@v4
         with:
           name: artifacts-${{ matrix.os }}
           path: ./wheelhouse/*.whl
+          retention-days: 3
 
-  upload_pypi_test:
-    name: Upload to PyPI (test)
-    needs: [build_wheels, build_sdist]
-    runs-on: ubuntu-22.04
-    if: github.repository == 'tornadoweb/tornado' && github.event_name == 'workflow_dispatch'
-    permissions:
-      # This permission is required for pypi's "trusted publisher" feature
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: artifacts-*
-          path: dist
-          merge-multiple: true
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
-        with:
-          repository-url: https://test.pypi.org/legacy/
-          skip-existing: true
-
-  upload_pypi:
-    name: Upload to PyPI (prod)
-    needs: [build_wheels, build_sdist]
-    runs-on: ubuntu-22.04
-    if: github.repository == 'tornadoweb/tornado' && github.event_name == 'push' && github.ref_type == 'tag' && startsWith(github.ref_name, 'v')
-    permissions:
-      # This permission is required for pypi's "trusted publisher" feature
-      id-token: write
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: artifacts-*
-          path: dist
-          merge-multiple: true
-
-      - uses: pypa/gh-action-pypi-publish@release/v1
